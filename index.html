@@ -178,6 +178,7 @@ input[type=range].zoom-slider::-moz-range-thumb{width:14px;height:14px;border-ra
 ::-webkit-scrollbar-thumb{background:#C8CCE0;border-radius:3px;}
 ::-webkit-scrollbar-thumb:hover{background:#A0A8C8;}
 </style>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 </head>
 <body>
 
@@ -206,9 +207,7 @@ input[type=range].zoom-slider::-moz-range-thumb{width:14px;height:14px;border-ra
     <button class="btn btn-csv" onclick="exportCSV()" title="Export all data as CSV">📤 Export CSV</button>
     <button class="btn btn-csv" onclick="triggerImport()" title="Import data from CSV">📥 Import CSV</button>
     <div class="hdr-sep"></div>
-    <span id="fileStatus" style="font-size:10px;font-weight:700;padding:5px 10px;border-radius:7px;background:#FEF0DC;color:#8A5010;letter-spacing:.2px;cursor:default;" title="Data file sync status">⚠️ No file</span>
-    <button class="btn btn-secondary" onclick="connectDataFile()" title="Connect an existing backlog-data.json file">📂 Open file</button>
-    <button class="btn btn-secondary" onclick="createDataFile()" title="Create a new backlog-data.json file">🆕 New file</button>
+    <span id="dbStatus" style="font-size:10px;font-weight:700;padding:5px 10px;border-radius:7px;background:#FEF0DC;color:#8A5010;letter-spacing:.2px;cursor:default;">⏳ Connecting…</span>
     <div class="hdr-sep"></div>
     <button class="btn btn-primary" onclick="openAddModal()">＋ Add Feature</button>
   </div>
@@ -386,98 +385,91 @@ let filterSquads = [];
 let filterPOs    = [];
 
 // ══════════════════════════════════════════════════════
-//  PERSISTENCE  (File System Access API + IndexedDB handle store)
+//  PERSISTENCE  (Supabase)
 // ══════════════════════════════════════════════════════
-const _IDB_NAME = 'blt_file_db', _IDB_STORE = 'handles', _IDB_KEY = 'dataFile';
-let fileHandle = null;
+const SUPABASE_URL  = 'https://vqvigfvhgpflygzolzso.supabase.co';
+const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZxdmlnZnZoZ3BmbHlnem9senNvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkyODc3MDksImV4cCI6MjA5NDg2MzcwOX0.5-aVV0d4aBkDCgGwVCPQ5tKJTaAEUPWrANRPGfxW7n4';
+const db = supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
 
-function _idbOpen() {
-  return new Promise((res,rej) => {
-    const r = indexedDB.open(_IDB_NAME, 1);
-    r.onupgradeneeded = e => e.target.result.createObjectStore(_IDB_STORE);
-    r.onsuccess = e => res(e.target.result);
-    r.onerror   = () => res(null);
-  });
-}
-async function _idbGet(key) {
-  const db = await _idbOpen(); if (!db) return null;
-  return new Promise(res => {
-    const r = db.transaction(_IDB_STORE,'readonly').objectStore(_IDB_STORE).get(key);
-    r.onsuccess = () => res(r.result ?? null);
-    r.onerror   = () => res(null);
-  });
-}
-async function _idbSet(key, val) {
-  const db = await _idbOpen(); if (!db) return;
-  return new Promise(res => {
-    const tx = db.transaction(_IDB_STORE,'readwrite');
-    tx.objectStore(_IDB_STORE).put(val, key);
-    tx.oncomplete = res; tx.onerror = res;
-  });
-}
-
-function _setFileStatus(state) {
-  const el = document.getElementById('fileStatus');
+function _setStatus(state) {
+  const el = document.getElementById('dbStatus');
   if (!el) return;
   const S = {
-    connected:    ['📁 File synced',  '#2A7A5A','#D8EFE8'],
-    saved:        ['💾 Saved',        '#2A7A5A','#D8EFE8'],
-    disconnected: ['⚠️ No file',      '#8A5010','#FEF0DC'],
-    error:        ['❌ Save error',    '#8A1010','#FDE8E8'],
+    connected: ['🟢 Supabase', '#2A7A5A', '#D8EFE8'],
+    saving:    ['💾 Saving…',  '#2A4A9A', '#DCE8FE'],
+    error:     ['🔴 DB Error', '#8A1010', '#FDE8E8'],
   };
-  const [text,color,bg] = S[state] || S.disconnected;
+  const [text, color, bg] = S[state] || S.error;
   el.textContent = text; el.style.color = color; el.style.background = bg;
 }
 
-async function save() {
-  if (!fileHandle) return;
-  try {
-    const w = await fileHandle.createWritable();
-    await w.write(JSON.stringify({items, nextId}, null, 2));
-    await w.close();
-    _setFileStatus('saved');
-  } catch(e) { console.error('Save error', e); _setFileStatus('error'); }
+function toDB(it) {
+  return {
+    id: it.id,
+    feature_name:      it.featureName      || '',
+    functional_area:   it.functionalArea   || '',
+    squad_name:        it.squadName        || '',
+    product_owner:     it.productOwner     || '',
+    start_date:        it.startDate        || '',
+    end_date:          it.endDate          || '',
+    sub_tasks:         it.subTasks         || '',
+    app_resources:     it.appResources     || 0,
+    web_resources:     it.webResources     || 0,
+    be_resources:      it.beResources      || 0,
+    qa_resources:      it.qaResources      || 0,
+    revised_start_date:it.revisedStartDate || '',
+    revised_end_date:  it.revisedEndDate   || '',
+    effort_area:       it.effortArea       || '',
+    status:            it.status           || 'Ready',
+    open_doubt:        !!it.openDoubt,
+    is_expanded:       !!it.isExpanded,
+  };
+}
+
+function fromDB(row) {
+  return {
+    id:               row.id,
+    featureName:      row.feature_name       || '',
+    functionalArea:   row.functional_area    || '',
+    squadName:        row.squad_name         || '',
+    productOwner:     row.product_owner      || '',
+    startDate:        row.start_date         || '',
+    endDate:          row.end_date           || '',
+    subTasks:         row.sub_tasks          || '',
+    appResources:     row.app_resources      || 0,
+    webResources:     row.web_resources      || 0,
+    beResources:      row.be_resources       || 0,
+    qaResources:      row.qa_resources       || 0,
+    revisedStartDate: row.revised_start_date || '',
+    revisedEndDate:   row.revised_end_date   || '',
+    effortArea:       row.effort_area        || '',
+    status:           row.status             || 'Ready',
+    openDoubt:        !!row.open_doubt,
+    isExpanded:       !!row.is_expanded,
+  };
+}
+
+async function save(itemsToSave) {
+  _setStatus('saving');
+  const rows = (itemsToSave || items).map(toDB);
+  const { error } = await db.from('backlog_items').upsert(rows, { onConflict: 'id' });
+  if (error) { console.error('Save error', error); _setStatus('error'); showToast('❌ Save failed'); }
+  else _setStatus('connected');
+}
+
+async function dbDelete(id) {
+  const { error } = await db.from('backlog_items').delete().eq('id', id);
+  if (error) { console.error('Delete error', error); showToast('❌ Delete failed'); }
 }
 
 async function load() {
-  const stored = await _idbGet(_IDB_KEY);
-  if (!stored) { _setFileStatus('disconnected'); return; }
-  try {
-    const perm = await stored.requestPermission({mode:'readwrite'});
-    if (perm !== 'granted') { _setFileStatus('disconnected'); return; }
-    fileHandle = stored;
-    const text = await (await fileHandle.getFile()).text();
-    const d = JSON.parse(text);
-    if (d && Array.isArray(d.items)) { items = d.items; nextId = d.nextId || nextId; }
-    _setFileStatus('connected');
-  } catch(e) { _setFileStatus('disconnected'); }
-}
-
-async function connectDataFile() {
-  try {
-    const opts = { types:[{description:'Backlog JSON',accept:{'application/json':['.json']}}], multiple:false };
-    const [h] = await window.showOpenFilePicker(opts);
-    fileHandle = h; await _idbSet(_IDB_KEY, h);
-    try {
-      const text = await (await h.getFile()).text();
-      const d = JSON.parse(text);
-      if (d && Array.isArray(d.items) && d.items.length > 0) {
-        if (confirm(`Found ${d.items.length} items in the file — load them? (Cancel keeps current data)`)) {
-          items = d.items; nextId = d.nextId || nextId; initFilters(); renderAll();
-        }
-      }
-    } catch(e) { /* empty or invalid — will overwrite */ }
-    await save(); _setFileStatus('connected'); showToast('📁 Data file connected');
-  } catch(e) { if (e.name !== 'AbortError') showToast('❌ Could not connect file'); }
-}
-
-async function createDataFile() {
-  try {
-    const opts = { suggestedName:'backlog-data.json', types:[{description:'Backlog JSON',accept:{'application/json':['.json']}}] };
-    const h = await window.showSaveFilePicker(opts);
-    fileHandle = h; await _idbSet(_IDB_KEY, h);
-    await save(); _setFileStatus('connected'); showToast('📁 backlog-data.json created & connected');
-  } catch(e) { if (e.name !== 'AbortError') showToast('❌ Could not create file'); }
+  const { data, error } = await db.from('backlog_items').select('*').order('id');
+  if (error) { console.error('Load error', error); _setStatus('error'); showToast('❌ Could not load from Supabase'); return; }
+  if (data && data.length > 0) {
+    items = data.map(fromDB);
+    nextId = Math.max(...items.map(i => i.id)) + 1;
+  }
+  _setStatus('connected');
 }
 
 // ══════════════════════════════════════════════════════
@@ -756,7 +748,7 @@ function toggleFeat(fnEnc) {
   const grp = items.filter(i => i.featureName === fn);
   const nv  = !grp[0].isExpanded;
   grp.forEach(i => { i.isExpanded = nv; });
-  save(); renderGantt();
+  save(grp); renderGantt();
 }
 function collapseAll(){ items.forEach(i=>{i.isExpanded=false;}); save(); renderGantt(); }
 function expandAll()  { items.forEach(i=>{i.isExpanded=true;}); save(); renderGantt(); }
@@ -767,7 +759,7 @@ function expandAll()  { items.forEach(i=>{i.isExpanded=true;}); save(); renderGa
 function deleteItem(id) {
   if (!confirm('Delete this item? This cannot be undone.')) return;
   items=items.filter(i=>i.id!==id);
-  save(); renderAll();
+  dbDelete(id); renderAll();
 }
 
 // ══════════════════════════════════════════════════════
@@ -838,12 +830,14 @@ function handleImport(e) {
   reader.readAsText(file);
 }
 
-function doImport(mode) {
+async function doImport(mode) {
   if (!pendingImportItems) return;
   if (mode==='replace') {
+    await db.from('backlog_items').delete().gte('id', 0);
     items=pendingImportItems;
     const maxId=Math.max(0,...items.map(i=>i.id));
     nextId=maxId+1;
+    await save();
     showToast('🔄 Replaced with '+items.length+' items');
   } else {
     pendingImportItems.forEach(ni=>{
@@ -856,11 +850,12 @@ function doImport(mode) {
         items.push(ni);
       }
     });
+    await save(pendingImportItems);
     showToast('🔀 Merged '+pendingImportItems.length+' items');
   }
   pendingImportItems=null;
   closeModal('importOverlay');
-  save(); renderAll();
+  renderAll();
 }
 
 // ══════════════════════════════════════════════════════
@@ -970,13 +965,15 @@ function saveItem() {
   const v=getFormVals();
   if (!v.featureName) { alert('Feature Name is required.'); return; }
   if (!v.startDate)   { alert('Start Date is required.'); return; }
+  let savedItem;
   if (editingId!==null) {
     const idx=items.findIndex(i=>i.id===editingId);
-    if (idx!==-1) items[idx]={...items[idx],...v};
+    if (idx!==-1) { items[idx]={...items[idx],...v}; savedItem=items[idx]; }
   } else {
-    items.push({...v, id:nextId++, isExpanded:false});
+    savedItem={...v, id:nextId++, isExpanded:false};
+    items.push(savedItem);
   }
-  save(); closeModal('editOverlay'); renderAll();
+  save([savedItem]); closeModal('editOverlay'); renderAll();
   showToast('💾 Saved');
 }
 
@@ -1056,7 +1053,11 @@ document.addEventListener('click', e => {
 //  BOOT
 // ══════════════════════════════════════════════════════
 function renderAll() { renderHeader(); renderKPI(); renderGantt(); }
-async function boot() { await load(); initFilters(); renderAll(); }
+async function boot() {
+  await load();
+  initFilters();
+  renderAll();
+}
 boot();
 </script>
 </body>
