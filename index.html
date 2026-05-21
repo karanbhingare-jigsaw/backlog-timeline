@@ -829,11 +829,11 @@ function renderGantt() {
                 const ow = Math.max(spanW(it.startDate, it.endDate), 8);
                 bars += `<div class="g-bar-orig" style="left:${ox}px;width:${ow}px;border-color:${sc};top:${top}px;height:${barH}px;"></div>`;
               }
-              const fullLbl  = `${it.squadName} · ${it.effortArea} · ${it.productOwner}`;
-              const midLbl   = `${it.squadName} · ${it.productOwner}`;
+              const fullLbl  = `${it.squadName} · ${it.effortArea} · ${it.productOwner} · ${it.functionalArea}`;
+              const midLbl   = `${it.squadName} · ${it.productOwner} · ${it.functionalArea}`;
               const shortLbl = it.squadName.split(' ')[0];
               const lbl = ew > 200 ? fullLbl : ew > 120 ? midLbl : ew > 50 ? shortLbl : '';
-              bars += `<div class="g-bar" style="left:${ex}px;width:${ew}px;background:${sc};color:#fff;top:${top}px;height:${barH}px;opacity:.88;text-shadow:0 1px 2px rgba(0,0,0,.2);overflow:hidden;white-space:nowrap;text-overflow:ellipsis;" onclick="openEdit(${it.id})" title="${it.featureName}&#10;${it.squadName} · ${it.effortArea} · ${it.productOwner}&#10;${fd(effStart(it))} → ${fd(effEnd(it))}&#10;${it.status}${it.openDoubt?' · ❓ Open Doubt':''}">
+              bars += `<div class="g-bar" style="left:${ex}px;width:${ew}px;background:${sc};color:#fff;top:${top}px;height:${barH}px;opacity:.88;text-shadow:0 1px 2px rgba(0,0,0,.2);overflow:hidden;white-space:nowrap;text-overflow:ellipsis;" onclick="openEdit(${it.id})" title="${it.featureName}&#10;${it.squadName} · ${it.effortArea} · ${it.productOwner} · ${it.functionalArea}&#10;${fd(effStart(it))} → ${fd(effEnd(it))}&#10;${it.status}${it.openDoubt?' · ❓ Open Doubt':''}">
                 ${lbl}
               </div>`;
               return bars;
