@@ -177,6 +177,14 @@ input[type=range].zoom-slider::-moz-range-thumb{width:14px;height:14px;border-ra
 ::-webkit-scrollbar-track{background:#EEF0F8;}
 ::-webkit-scrollbar-thumb{background:#C8CCE0;border-radius:3px;}
 ::-webkit-scrollbar-thumb:hover{background:#A0A8C8;}
+
+/* ── DRAG & DROP ── */
+.drag-handle{cursor:grab;font-size:15px;opacity:.3;margin-right:6px;user-select:none;line-height:1;flex-shrink:0;}
+.drag-handle:hover{opacity:.75;}
+.squad-hdr[draggable="true"]{cursor:grab;}
+.squad-hdr[draggable="true"]:active{cursor:grabbing;}
+.squad-group.drag-over{outline:2px solid #8AABEA;outline-offset:-2px;border-radius:4px;background:rgba(138,171,234,.06);}
+.squad-group.is-dragging{opacity:.4;}
 </style>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 </head>
@@ -383,6 +391,8 @@ let editingId = null;
 let pendingImportItems = null;
 let filterSquads = [];
 let filterPOs    = [];
+let featureOrder = []; // persisted display order of feature names
+let dragSrc      = null; // encodeURIComponent(featureName) being dragged
 
 // ══════════════════════════════════════════════════════
 //  PERSISTENCE  (Supabase)
@@ -423,6 +433,7 @@ function toDB(it) {
     status:            it.status           || 'Ready',
     open_doubt:        !!it.openDoubt,
     is_expanded:       !!it.isExpanded,
+    sort_order:        it.sortOrder ?? 0,
   };
 }
 
@@ -446,6 +457,7 @@ function fromDB(row) {
     status:           row.status             || 'Ready',
     openDoubt:        !!row.open_doubt,
     isExpanded:       !!row.is_expanded,
+    sortOrder:        row.sort_order ?? 0,
   };
 }
 
@@ -469,7 +481,89 @@ async function load() {
     items = data.map(fromDB);
     nextId = Math.max(...items.map(i => i.id)) + 1;
   }
+  initFeatureOrder();
   _setStatus('connected');
+}
+
+// ══════════════════════════════════════════════════════
+//  FEATURE ORDER  (drag-and-drop persistence)
+// ══════════════════════════════════════════════════════
+function initFeatureOrder() {
+  const g = grouped(items);
+  const names = Object.keys(g);
+  const hasCustomOrder = items.some(it => (it.sortOrder ?? 0) !== 0);
+
+  featureOrder = names.slice().sort((a, b) => {
+    if (hasCustomOrder) {
+      const aOrd = Math.min(...g[a].map(it => it.sortOrder ?? 9999));
+      const bOrd = Math.min(...g[b].map(it => it.sortOrder ?? 9999));
+      if (aOrd !== bOrd) return aOrd - bOrd;
+    }
+    // Fall back to earliest start date
+    const aMin = Math.min(...g[a].map(it => pd(it.startDate)?.getTime() ?? Infinity));
+    const bMin = Math.min(...g[b].map(it => pd(it.startDate)?.getTime() ?? Infinity));
+    return aMin - bMin;
+  });
+
+  if (!hasCustomOrder) {
+    // Assign initial sort_order so future drags persist correctly
+    featureOrder.forEach((fn, idx) => {
+      items.filter(i => i.featureName === fn).forEach(i => { i.sortOrder = idx; });
+    });
+    save(); // write initial order to Supabase
+  }
+}
+
+function applyNewOrder(srcFn, tgtFn) {
+  const si = featureOrder.indexOf(srcFn);
+  const ti = featureOrder.indexOf(tgtFn);
+  if (si === -1 || ti === -1 || si === ti) return;
+  featureOrder.splice(si, 1);
+  const newTi = featureOrder.indexOf(tgtFn);
+  featureOrder.splice(newTi, 0, srcFn);
+  featureOrder.forEach((fn, idx) => {
+    items.filter(i => i.featureName === fn).forEach(i => { i.sortOrder = idx; });
+  });
+  save();
+  renderGantt();
+  showToast('✅ Order saved');
+}
+
+// ── Drag handlers (called from inline HTML) ──
+function onDragStart(e, fnEnc) {
+  dragSrc = fnEnc;
+  e.dataTransfer.effectAllowed = 'move';
+  e.dataTransfer.setData('text/plain', fnEnc);
+  // Delay so the ghost image renders before opacity drops
+  requestAnimationFrame(() => {
+    const el = document.querySelector(`.squad-group[data-fn="${fnEnc}"]`);
+    if (el) el.classList.add('is-dragging');
+  });
+}
+
+function onDragOver(e, fnEnc) {
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+  if (fnEnc === dragSrc) return;
+  document.querySelectorAll('.squad-group.drag-over').forEach(el => el.classList.remove('drag-over'));
+  const el = document.querySelector(`.squad-group[data-fn="${fnEnc}"]`);
+  if (el) el.classList.add('drag-over');
+}
+
+function onDragEnd(e) {
+  document.querySelectorAll('.squad-group.is-dragging, .squad-group.drag-over')
+    .forEach(el => el.classList.remove('is-dragging', 'drag-over'));
+  dragSrc = null;
+}
+
+function onDrop(e, fnEnc) {
+  e.preventDefault();
+  document.querySelectorAll('.squad-group.drag-over').forEach(el => el.classList.remove('drag-over'));
+  if (!dragSrc || dragSrc === fnEnc) { dragSrc = null; return; }
+  const srcFn = decodeURIComponent(dragSrc);
+  const tgtFn = decodeURIComponent(fnEnc);
+  dragSrc = null;
+  applyNewOrder(srcFn, tgtFn);
 }
 
 // ══════════════════════════════════════════════════════
@@ -602,11 +696,16 @@ function renderGantt() {
   });
   const g = grouped(src);
 
-  const featureNames = Object.keys(g).sort((a, b) => {
-    const aMin = Math.min(...g[a].map(it => pd(it.startDate) ? pd(it.startDate).getTime() : Infinity));
-    const bMin = Math.min(...g[b].map(it => pd(it.startDate) ? pd(it.startDate).getTime() : Infinity));
-    return aMin - bMin;
-  });
+  // Use persisted featureOrder; append any new features not yet ordered
+  const allNames  = new Set(Object.keys(g));
+  const ordered   = featureOrder.filter(fn => allNames.has(fn));
+  const unordered = [...allNames].filter(fn => !featureOrder.includes(fn))
+    .sort((a, b) => {
+      const aMin = Math.min(...g[a].map(it => pd(it.startDate)?.getTime() ?? Infinity));
+      const bMin = Math.min(...g[b].map(it => pd(it.startDate)?.getTime() ?? Infinity));
+      return aMin - bMin;
+    });
+  const featureNames = [...ordered, ...unordered];
 
   let html = '';
 
@@ -634,9 +733,17 @@ function renderGantt() {
     const barAreaH = fItems.length * (barH + barGap) - barGap;
     const rowMinH  = Math.max(52, barAreaH + 22);
 
+    const encFn = encodeURIComponent(fn);
     html += `
-    <div class="squad-group">
-      <div class="squad-hdr" style="background:${hdrColor};color:${HDR_TEXT};">
+    <div class="squad-group" data-fn="${encFn}"
+         ondragover="onDragOver(event,'${encFn}')"
+         ondrop="onDrop(event,'${encFn}')"
+         ondragleave="this.classList.remove('drag-over')">
+      <div class="squad-hdr" draggable="true"
+           ondragstart="onDragStart(event,'${encFn}')"
+           ondragend="onDragEnd(event)"
+           style="background:${hdrColor};color:${HDR_TEXT};">
+        <span class="drag-handle" title="Drag to reorder">⠿</span>
         📌 ${fn}
         <span class="squad-count" style="background:rgba(74,78,104,.1);color:${HDR_TEXT};">${fItems.length} item${fItems.length!==1?'s':''} · ${squads.length} squad${squads.length!==1?'s':''}</span>
       </div>
@@ -837,6 +944,8 @@ async function doImport(mode) {
     items=pendingImportItems;
     const maxId=Math.max(0,...items.map(i=>i.id));
     nextId=maxId+1;
+    featureOrder=[];
+    initFeatureOrder();
     await save();
     showToast('🔄 Replaced with '+items.length+' items');
   } else {
