@@ -359,7 +359,7 @@ const EFFORT_STYLE = {
   'Integration':{bg:'#FAC898',text:'#7C2D12'},
 };
 
-const CSV_FIELDS = ['id','featureName','functionalArea','squadName','productOwner','startDate','endDate','subTasks','appResources','webResources','beResources','qaResources','revisedStartDate','revisedEndDate','effortArea','status','openDoubt'];
+const CSV_FIELDS = ['id','featureName','functionalArea','squadName','productOwner','startDate','endDate','subTasks','appResources','webResources','beResources','qaResources','revisedStartDate','revisedEndDate','effortArea','status','openDoubt','systemDep1','systemDep2','systemDep3'];
 
 // ══════════════════════════════════════════════════════
 //  DATA
@@ -434,6 +434,9 @@ function toDB(it) {
     open_doubt:        !!it.openDoubt,
     is_expanded:       !!it.isExpanded,
     sort_order:        it.sortOrder ?? 0,
+    system_dep_1:      it.systemDep1 || '',
+    system_dep_2:      it.systemDep2 || '',
+    system_dep_3:      it.systemDep3 || '',
   };
 }
 
@@ -458,6 +461,9 @@ function fromDB(row) {
     openDoubt:        !!row.open_doubt,
     isExpanded:       !!row.is_expanded,
     sortOrder:        row.sort_order ?? 0,
+    systemDep1:       row.system_dep_1 || '',
+    systemDep2:       row.system_dep_2 || '',
+    systemDep3:       row.system_dep_3 || '',
   };
 }
 
@@ -800,6 +806,9 @@ function renderGantt() {
                   ${it.qaResources>0?`<span class="rc rc-qa">✅ ${it.qaResources} QA</span>`:''}
                 </div>
                 ${it.subTasks?`<div class="subtasks"><strong>Sub-tasks:</strong> ${it.subTasks}</div>`:''}
+                ${(it.systemDep1||it.systemDep2||it.systemDep3)?`<div class="subtasks" style="margin-top:6px;"><strong>System Dependencies:</strong>
+                  ${[it.systemDep1,it.systemDep2,it.systemDep3].filter(Boolean).map(d=>`<span style="display:inline-block;margin:2px 4px 2px 0;padding:2px 8px;background:#EEF0F8;border-radius:20px;font-size:10px;font-weight:700;color:#445;">${d}</span>`).join('')}
+                </div>`:''}
                 <div class="feat-actions">
                   <button class="btn btn-primary" style="font-size:10px;padding:5px 11px" onclick="openEdit(${it.id})">✏️ Edit</button>
                   <button class="btn btn-danger" style="font-size:10px;padding:5px 11px" onclick="deleteItem(${it.id})">🗑 Delete</button>
@@ -1030,6 +1039,14 @@ function buildForm(it) {
       <option value="false" ${!it.openDoubt?'selected':''}>No — Clear</option>
       <option value="true" ${it.openDoubt?'selected':''}>Yes — Open Doubt</option>
     </select></div>
+    <div class="fg full" style="margin-top:4px;border-top:1px dashed #EEF0FA;padding-top:10px;">
+      <div class="fl" style="margin-bottom:6px;">System Dependencies</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;">
+        <div><div class="res-lbl">Dependency 1</div><input class="fi" id="f-dep1" placeholder="e.g. SAP, OMS…" value="${(it.systemDep1||'').replace(/"/g,'&quot;')}"></div>
+        <div><div class="res-lbl">Dependency 2</div><input class="fi" id="f-dep2" placeholder="e.g. Bloomreach…" value="${(it.systemDep2||'').replace(/"/g,'&quot;')}"></div>
+        <div><div class="res-lbl">Dependency 3</div><input class="fi" id="f-dep3" placeholder="e.g. Payment GW…" value="${(it.systemDep3||'').replace(/"/g,'&quot;')}"></div>
+      </div>
+    </div>
   `;
 }
 
@@ -1043,7 +1060,7 @@ function openEdit(id) {
 function openAddModal() {
   editingId=null;
   document.getElementById('modalTitle').textContent='＋ Add New Feature Item';
-  document.getElementById('modalBody').innerHTML=buildForm({featureName:'',functionalArea:'',squadName:SQUADS[0],productOwner:POS[0],startDate:'2026-05-20',endDate:'',subTasks:'',appResources:0,webResources:0,beResources:0,qaResources:0,revisedStartDate:'',revisedEndDate:'',effortArea:EFFORTS[0],status:'Ready',openDoubt:false,isExpanded:false});
+  document.getElementById('modalBody').innerHTML=buildForm({featureName:'',functionalArea:'',squadName:SQUADS[0],productOwner:POS[0],startDate:'2026-05-20',endDate:'',subTasks:'',appResources:0,webResources:0,beResources:0,qaResources:0,revisedStartDate:'',revisedEndDate:'',effortArea:EFFORTS[0],status:'Ready',openDoubt:false,isExpanded:false,systemDep1:'',systemDep2:'',systemDep3:''});
   document.getElementById('editOverlay').classList.add('show');
 }
 function closeModal(id) { document.getElementById(id).classList.remove('show'); if(id==='editOverlay') editingId=null; }
@@ -1067,6 +1084,9 @@ function getFormVals() {
     qaResources:     parseInt(document.getElementById('f-qa').value)||0,
     subTasks:        document.getElementById('f-sub').value.trim(),
     openDoubt:       document.getElementById('f-doubt').value==='true',
+    systemDep1:      document.getElementById('f-dep1').value.trim(),
+    systemDep2:      document.getElementById('f-dep2').value.trim(),
+    systemDep3:      document.getElementById('f-dep3').value.trim(),
   };
 }
 
