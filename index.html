@@ -246,6 +246,13 @@ input[type=range].zoom-slider::-moz-range-thumb{width:14px;height:14px;border-ra
     <div class="fd-menu" id="fd-po-menu"></div>
   </div>
 
+  <div class="fd" id="fd-dep">
+    <button class="fd-btn" id="fd-dep-btn" onclick="toggleFD('fd-dep')">
+      System Dependency <span id="fd-dep-badge"></span><span class="fd-arrow">▾</span>
+    </button>
+    <div class="fd-menu" id="fd-dep-menu"></div>
+  </div>
+
   <button class="filter-clear" id="filterClearBtn" onclick="clearFilters()" style="display:none">✕ Clear filters</button>
   <span class="filter-info" id="filterInfo"></span>
 </div>
@@ -391,6 +398,7 @@ let editingId = null;
 let pendingImportItems = null;
 let filterSquads = [];
 let filterPOs    = [];
+let filterDeps   = [];
 let featureOrder = []; // persisted display order of feature names
 let dragSrc      = null; // encodeURIComponent(featureName) being dragged
 
@@ -695,11 +703,7 @@ function renderGantt() {
   const totalW = NUM_WEEKS * WEEK_W;
   const todayX = dateToX(new Date().toISOString().slice(0,10));
 
-  const src = items.filter(it => {
-    const sOK = !filterSquads.length || filterSquads.includes(it.squadName);
-    const pOK = !filterPOs.length    || filterPOs.includes(it.productOwner);
-    return sOK && pOK;
-  });
+  const src = items.filter(it => itemPassesFilters(it));
   const g = grouped(src);
 
   // Use persisted featureOrder; append any new features not yet ordered
@@ -1112,25 +1116,29 @@ function saveItem() {
 function initFilters() {
   const squads = [...new Set(items.map(i => i.squadName).filter(Boolean))].sort();
   const pos    = [...new Set(items.map(i => i.productOwner).filter(Boolean))].sort();
-  buildFDMenu('fd-squad', squads);
-  buildFDMenu('fd-po', pos);
+  const deps   = [...new Set(items.flatMap(i =>
+    [i.systemDep1, i.systemDep2, i.systemDep3].filter(Boolean)
+  ))].sort();
+  buildFDMenu('fd-squad', squads, filterSquads);
+  buildFDMenu('fd-po',    pos,    filterPOs);
+  buildFDMenu('fd-dep',   deps,   filterDeps);
 }
 
-function buildFDMenu(fdId, options) {
-  const sel = fdId === 'fd-squad' ? filterSquads : filterPOs;
+function buildFDMenu(fdId, options, sel) {
   document.getElementById(fdId + '-menu').innerHTML = options.map(opt => `
     <div class="fd-item">
-      <input type="checkbox" id="${fdId}-opt-${opt.replace(/\s+/g,'_')}" value="${opt}"
+      <input type="checkbox" id="${fdId}-opt-${opt.replace(/\W+/g,'_')}" value="${opt}"
         ${sel.includes(opt) ? 'checked' : ''}
         onchange="onFDChange('${fdId}')">
-      <label for="${fdId}-opt-${opt.replace(/\s+/g,'_')}">${opt}</label>
+      <label for="${fdId}-opt-${opt.replace(/\W+/g,'_')}">${opt}</label>
     </div>`).join('');
 }
 
 function onFDChange(fdId) {
   const vals = [...document.querySelectorAll(`#${fdId}-menu input:checked`)].map(c => c.value);
-  if (fdId === 'fd-squad') filterSquads = vals;
-  else filterPOs = vals;
+  if      (fdId === 'fd-squad') filterSquads = vals;
+  else if (fdId === 'fd-po')    filterPOs    = vals;
+  else if (fdId === 'fd-dep')   filterDeps   = vals;
   updateFilterUI();
   renderGantt();
 }
@@ -1141,35 +1149,42 @@ function toggleFD(fdId) {
 }
 
 function clearFilters() {
-  filterSquads = []; filterPOs = [];
+  filterSquads = []; filterPOs = []; filterDeps = [];
   document.querySelectorAll('.fd-menu input[type=checkbox]').forEach(c => { c.checked = false; });
   updateFilterUI();
   renderGantt();
 }
 
+function _setBadge(btnId, badgeId, vals) {
+  const el = document.getElementById(badgeId);
+  if (el) el.innerHTML = vals.length ? `<span class="fd-badge">${vals.length}</span>` : '';
+  document.getElementById(btnId).classList.toggle('active', !!vals.length);
+}
+
 function updateFilterUI() {
-  const sb = document.getElementById('fd-squad-badge');
-  if (sb) sb.innerHTML = filterSquads.length ? `<span class="fd-badge">${filterSquads.length}</span>` : '';
-  document.getElementById('fd-squad-btn').classList.toggle('active', !!filterSquads.length);
+  _setBadge('fd-squad-btn', 'fd-squad-badge', filterSquads);
+  _setBadge('fd-po-btn',    'fd-po-badge',    filterPOs);
+  _setBadge('fd-dep-btn',   'fd-dep-badge',   filterDeps);
 
-  const pb = document.getElementById('fd-po-badge');
-  if (pb) pb.innerHTML = filterPOs.length ? `<span class="fd-badge">${filterPOs.length}</span>` : '';
-  document.getElementById('fd-po-btn').classList.toggle('active', !!filterPOs.length);
-
-  const hasFilters = filterSquads.length || filterPOs.length;
+  const hasFilters = filterSquads.length || filterPOs.length || filterDeps.length;
   document.getElementById('filterClearBtn').style.display = hasFilters ? '' : 'none';
 
   if (hasFilters) {
-    const shown = items.filter(it => {
-      const sOK = !filterSquads.length || filterSquads.includes(it.squadName);
-      const pOK = !filterPOs.length    || filterPOs.includes(it.productOwner);
-      return sOK && pOK;
-    });
+    const shown = items.filter(it => itemPassesFilters(it));
     const fn = new Set(shown.map(i => i.featureName)).size;
     document.getElementById('filterInfo').textContent = `${fn} feature${fn !== 1 ? 's' : ''} shown`;
   } else {
     document.getElementById('filterInfo').textContent = '';
   }
+}
+
+function itemPassesFilters(it) {
+  const sOK = !filterSquads.length || filterSquads.includes(it.squadName);
+  const pOK = !filterPOs.length    || filterPOs.includes(it.productOwner);
+  const dOK = !filterDeps.length   || filterDeps.some(d =>
+    d === it.systemDep1 || d === it.systemDep2 || d === it.systemDep3
+  );
+  return sOK && pOK && dOK;
 }
 
 document.addEventListener('click', e => {
