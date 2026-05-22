@@ -278,6 +278,13 @@ input[type=range].zoom-slider::-moz-range-thumb{width:14px;height:14px;border-ra
       <button class="modal-close" onclick="closeModal('editOverlay')">✕</button>
     </div>
     <div class="form-grid" id="modalBody"></div>
+
+    <!-- ── CHANGELOG (edit mode only) ── -->
+    <div id="changelogSection" style="display:none;margin-top:18px;border-top:1px solid #EEF0F8;padding-top:14px;">
+      <div style="font-size:10px;font-weight:700;color:#b0b4cc;text-transform:uppercase;letter-spacing:.7px;margin-bottom:8px;">📋 Changelog</div>
+      <div id="changelogBody" style="max-height:220px;overflow-y:auto;border:1px solid #ECEEF8;border-radius:10px;padding:6px 10px;background:#FAFBFF;"></div>
+    </div>
+
     <div class="modal-footer">
       <button class="btn btn-secondary" onclick="closeModal('editOverlay')">Cancel</button>
       <button class="btn btn-primary" onclick="saveItem()">💾 Save Changes</button>
@@ -1051,20 +1058,32 @@ function buildForm(it) {
         <div><div class="res-lbl">Dependency 3</div><input class="fi" id="f-dep3" placeholder="e.g. Payment GW…" value="${(it.systemDep3||'').replace(/"/g,'&quot;')}"></div>
       </div>
     </div>
+    <div class="fg full" style="margin-top:4px;border-top:1px dashed #EEF0FA;padding-top:10px;">
+      <label class="fl">Status Update</label>
+      <textarea class="fi" id="f-status-note" rows="2" placeholder="Add a status note — saved with today's date…" style="resize:vertical"></textarea>
+    </div>
   `;
 }
 
-function openEdit(id) {
+async function openEdit(id) {
   const it=items.find(i=>i.id===id); if(!it) return;
   editingId=id;
   document.getElementById('modalTitle').textContent=`✏️ ${it.featureName} (${it.effortArea})`;
   document.getElementById('modalBody').innerHTML=buildForm(it);
+  // Show changelog section and start loading
+  const sec = document.getElementById('changelogSection');
+  const bod = document.getElementById('changelogBody');
+  sec.style.display = '';
+  bod.innerHTML = '<div style="font-size:10px;color:#ccc;text-align:center;padding:12px 0;">Loading…</div>';
   document.getElementById('editOverlay').classList.add('show');
+  const entries = await loadChangelog(id);
+  bod.innerHTML = renderChangelog(entries);
 }
 function openAddModal() {
   editingId=null;
   document.getElementById('modalTitle').textContent='＋ Add New Feature Item';
   document.getElementById('modalBody').innerHTML=buildForm({featureName:'',functionalArea:'',squadName:SQUADS[0],productOwner:POS[0],startDate:'2026-05-20',endDate:'',subTasks:'',appResources:0,webResources:0,beResources:0,qaResources:0,revisedStartDate:'',revisedEndDate:'',effortArea:EFFORTS[0],status:'Ready',openDoubt:false,isExpanded:false,systemDep1:'',systemDep2:'',systemDep3:''});
+  document.getElementById('changelogSection').style.display = 'none';
   document.getElementById('editOverlay').classList.add('show');
 }
 function closeModal(id) { document.getElementById(id).classList.remove('show'); if(id==='editOverlay') editingId=null; }
@@ -1094,20 +1113,95 @@ function getFormVals() {
   };
 }
 
-function saveItem() {
+async function saveItem() {
   const v=getFormVals();
   if (!v.featureName) { alert('Feature Name is required.'); return; }
   if (!v.startDate)   { alert('Start Date is required.'); return; }
-  let savedItem;
+  const statusNote = (document.getElementById('f-status-note')?.value || '').trim();
+
+  let savedItem, oldItem=null;
   if (editingId!==null) {
     const idx=items.findIndex(i=>i.id===editingId);
-    if (idx!==-1) { items[idx]={...items[idx],...v}; savedItem=items[idx]; }
+    if (idx!==-1) {
+      oldItem={...items[idx]};
+      items[idx]={...items[idx],...v};
+      savedItem=items[idx];
+    }
   } else {
     savedItem={...v, id:nextId++, isExpanded:false};
     items.push(savedItem);
   }
-  save([savedItem]); closeModal('editOverlay'); renderAll();
+
+  // Persist data + changelog entries in parallel
+  await Promise.all([
+    save([savedItem]),
+    oldItem ? logChanges(savedItem.id, oldItem, savedItem) : Promise.resolve(),
+    statusNote ? logStatusUpdate(savedItem.id, statusNote) : Promise.resolve(),
+  ]);
+
+  closeModal('editOverlay'); renderAll();
   showToast('💾 Saved');
+}
+
+// ══════════════════════════════════════════════════════
+//  CHANGELOG
+// ══════════════════════════════════════════════════════
+const FIELD_LABELS = {
+  featureName:'Feature Name', functionalArea:'Functional Area',
+  squadName:'Squad', productOwner:'Product Owner',
+  startDate:'Start Date', endDate:'End Date',
+  revisedStartDate:'Revised Start', revisedEndDate:'Revised End',
+  effortArea:'Effort Area', status:'Status', openDoubt:'Open Doubt',
+  appResources:'APP Resources', webResources:'WEB Resources',
+  beResources:'BE Resources', qaResources:'QA Resources',
+  subTasks:'Sub-Tasks',
+  systemDep1:'System Dep 1', systemDep2:'System Dep 2', systemDep3:'System Dep 3',
+};
+const TRACK_FIELDS = Object.keys(FIELD_LABELS);
+
+async function loadChangelog(itemId) {
+  const { data, error } = await db.from('backlog_changelog')
+    .select('*').eq('item_id', itemId).order('created_at', { ascending: false });
+  if (error) { console.error('Changelog load', error); return []; }
+  return data || [];
+}
+
+async function logChanges(itemId, oldItem, newItem) {
+  const entries = [];
+  for (const field of TRACK_FIELDS) {
+    const ov = String(oldItem[field] ?? '');
+    const nv = String(newItem[field] ?? '');
+    if (ov === nv) continue;
+    const label = FIELD_LABELS[field];
+    const od = field === 'openDoubt' ? (oldItem[field] ? 'Yes' : 'No') : (ov || '—');
+    const nd = field === 'openDoubt' ? (newItem[field] ? 'Yes' : 'No') : (nv || '—');
+    entries.push({ item_id: itemId, entry_type: 'change', summary: `${label}: ${od} → ${nd}` });
+  }
+  if (!entries.length) return;
+  const { error } = await db.from('backlog_changelog').insert(entries);
+  if (error) console.error('Changelog insert', error);
+}
+
+async function logStatusUpdate(itemId, text) {
+  if (!text.trim()) return;
+  const { error } = await db.from('backlog_changelog')
+    .insert([{ item_id: itemId, entry_type: 'status_update', summary: text.trim() }]);
+  if (error) console.error('Status update log', error);
+}
+
+function renderChangelog(entries) {
+  if (!entries.length) return `<div style="font-size:11px;color:#ccc;text-align:center;padding:14px 0;">No history yet.</div>`;
+  return entries.map(e => {
+    const dt = new Date(e.created_at).toLocaleString('en-GB',{day:'2-digit',month:'short',year:'2-digit',hour:'2-digit',minute:'2-digit'});
+    const isNote = e.entry_type === 'status_update';
+    return `<div style="display:flex;gap:8px;align-items:flex-start;padding:7px 0;border-bottom:1px solid #F0F2FA;">
+      <span style="flex-shrink:0;padding:2px 8px;border-radius:20px;font-size:9px;font-weight:800;margin-top:1px;${isNote?'background:#DCE8FE;color:#1A4CB8':'background:#E0F6EC;color:#186840'}">${isNote?'📝 Note':'🔄 Change'}</span>
+      <div style="flex:1;min-width:0;">
+        <div style="font-size:11px;color:#334;word-break:break-word;line-height:1.45;">${e.summary}</div>
+        <div style="font-size:9px;color:#b0b4cc;margin-top:3px;">${dt}</div>
+      </div>
+    </div>`;
+  }).join('');
 }
 
 // ══════════════════════════════════════════════════════
